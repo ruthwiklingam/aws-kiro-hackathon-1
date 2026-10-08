@@ -9,7 +9,7 @@ Description: >
 Parameters:
   BedrockModelId:
     Type: String
-    Default: anthropic.claude-haiku-4-5-20251001-v1:0
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
     Description: Bedrock model ID used by the generate-recommendations Lambda.
 
   LambdaLayerBucket:
@@ -222,8 +222,12 @@ Resources:
                   - dynamodb:UpdateItem
                 Resource: !GetAtt StudentsTable.Arn
               - Effect: Allow
-                Action: bedrock:InvokeModel
-                Resource: arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-*
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:Converse
+                Resource:
+                  - arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-*
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
 
   # =========================================================================
   # Lambda Functions
