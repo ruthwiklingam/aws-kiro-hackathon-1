@@ -228,6 +228,11 @@ Resources:
                 Resource:
                   - arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-*
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+              - Effect: Allow
+                Action:
+                  - aws-marketplace:ViewSubscriptions
+                  - aws-marketplace:Subscribe
+                Resource: '*'
 
   # =========================================================================
   # Lambda Functions
