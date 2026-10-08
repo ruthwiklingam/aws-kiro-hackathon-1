@@ -50,7 +50,7 @@ export default function Dashboard() {
   const barData = useMemo(() => {
     const buckets = { '<2.0': 0, '2.0–2.5': 0, '2.5–3.0': 0, '3.0+': 0 };
     students.forEach(s => {
-      const bucket = gpaRange(s.gpa ?? 0);
+      const bucket = gpaRange(s.currentGpa ?? 0);
       buckets[bucket] = (buckets[bucket] || 0) + 1;
     });
     return Object.entries(buckets).map(([range, count]) => ({ range, count }));
@@ -63,10 +63,7 @@ export default function Dashboard() {
       .filter(s => {
         if (!search.trim()) return true;
         const q = search.toLowerCase();
-        return (
-          (s.name || '').toLowerCase().includes(q) ||
-          (s.studentId || '').toLowerCase().includes(q)
-        );
+        return (s.studentId || '').toLowerCase().includes(q);
       });
   }, [students, riskFilter, search]);
 
@@ -212,38 +209,34 @@ export default function Dashboard() {
             ) : (
               <div className={styles.studentsGrid}>
                 {pageItems.map(student => (
-                  <div key={student.studentId || student.id} className={styles.studentCard}>
+                  <div key={student.studentId} className={styles.studentCard}>
                     <div className={styles.studentCardHeader}>
-                      <span className={styles.studentName}>{student.name}</span>
+                      <span className={styles.studentName}>{student.studentId}</span>
                       <RiskBadge level={student.riskLevel} />
-                    </div>
-                    <div className={styles.studentMeta}>
-                      <span className={styles.metaItem}>{student.major || '—'}</span>
                     </div>
                     <div className={styles.studentStats}>
                       <div className={styles.studentStat}>
                         <span className={styles.statItemLabel}>GPA</span>
                         <span className={styles.statItemValue}>
-                          {student.gpa != null ? student.gpa.toFixed(2) : '—'}
+                          {student.currentGpa != null ? Number(student.currentGpa).toFixed(2) : '—'}
                         </span>
                       </div>
                       <div className={styles.studentStat}>
                         <span className={styles.statItemLabel}>Attendance</span>
                         <span className={styles.statItemValue}>
-                          {student.attendanceRate != null
-                            ? `${(student.attendanceRate * 100).toFixed(0)}%`
+                          {student.attendancePct != null
+                            ? `${Number(student.attendancePct).toFixed(0)}%`
                             : '—'}
                         </span>
                       </div>
-                    </div>
-                    {student.advisor && (
-                      <div className={styles.advisorLine}>
-                        Advisor: <strong>{student.advisor}</strong>
+                      <div className={styles.studentStat}>
+                        <span className={styles.statItemLabel}>Risk Score</span>
+                        <span className={styles.statItemValue}>{student.riskScore ?? '—'}</span>
                       </div>
-                    )}
+                    </div>
                     <button
                       className={styles.viewBtn}
-                      onClick={() => navigate(`/students/${student.studentId || student.id}`)}
+                      onClick={() => navigate(`/students/${student.studentId}`)}
                     >
                       View Detail →
                     </button>

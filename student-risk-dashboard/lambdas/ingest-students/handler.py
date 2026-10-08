@@ -37,24 +37,22 @@ table = dynamodb.Table(STUDENTS_TABLE)
 
 # ---------------------------------------------------------------------------
 # Expected column headers (order-independent; matched by name)
+# Matches the actual Team1Dataset.xlsx columns:
+#   student_id, current_gpa, previous_gpa, attendance_pct, missed_classes,
+#   lms_activity_score, missing_assignments, advising_visit_count,
+#   days_since_last_advising, retention_status
 # ---------------------------------------------------------------------------
 REQUIRED_COLUMNS = {
-    "StudentID",
-    "FirstName",
-    "LastName",
-    "Email",
-    "Major",
-    "Advisor",
-    "GPA",
-    "AttendanceRate",
-    "AdvisingVisits",
-    "FailedCourses",
-    "FinancialAidIssues",
-    "EnrollmentDate",
-    "CreditHoursAttempted",
-    "CreditHoursEarned",
-    "LastLoginDays",
-    "DormResident",
+    "student_id",
+    "current_gpa",
+    "previous_gpa",
+    "attendance_pct",
+    "missed_classes",
+    "lms_activity_score",
+    "missing_assignments",
+    "advising_visit_count",
+    "days_since_last_advising",
+    "retention_status",
 }
 
 # DynamoDB batch_writer flushes at 25 items; AWS limit is 25 per batch.
@@ -65,9 +63,9 @@ DYNAMO_BATCH_SIZE = 25
 # Risk scoring
 # ---------------------------------------------------------------------------
 
-def compute_risk(gpa: float, attendance: float, advising_visits: int,
-                 failed_courses: int, financial_aid_issues: bool,
-                 last_login_days: int) -> tuple[int, str]:
+def compute_risk(current_gpa: float, attendance_pct: float, advising_visit_count: int,
+                 missing_assignments: int, missed_classes: int,
+                 days_since_last_advising: int) -> tuple[int, str]:
     """
     Compute a risk score (0-100) and risk level ('HIGH'/'MEDIUM'/'LOW')
     from the given student metrics.
@@ -79,38 +77,39 @@ def compute_risk(gpa: float, attendance: float, advising_visits: int,
     score = 0
 
     # GPA contribution
-    if gpa < 1.5:
+    if current_gpa < 1.5:
         score += 40
-    elif gpa < 2.0:
+    elif current_gpa < 2.0:
         score += 30
-    elif gpa < 2.5:
+    elif current_gpa < 2.5:
         score += 15
-    elif gpa < 3.0:
+    elif current_gpa < 3.0:
         score += 5
 
     # Attendance contribution
-    if attendance < 60:
+    if attendance_pct < 60:
         score += 30
-    elif attendance < 75:
+    elif attendance_pct < 75:
         score += 15
-    elif attendance < 85:
+    elif attendance_pct < 85:
         score += 5
 
     # Advising visits contribution
-    if advising_visits == 0:
+    if advising_visit_count == 0:
         score += 15
-    elif advising_visits == 1:
+    elif advising_visit_count == 1:
         score += 5
 
-    # Failed courses
-    score += failed_courses * 10
+    # Missing assignments
+    score += min(missing_assignments * 5, 20)
 
-    # Financial aid
-    if financial_aid_issues:
+    # Missed classes
+    score += min(missed_classes * 3, 15)
+
+    # Days since last advising
+    if days_since_last_advising > 60:
         score += 10
-
-    # Engagement / last login
-    if last_login_days > 14:
+    elif days_since_last_advising > 30:
         score += 5
 
     score = min(score, 100)
@@ -216,22 +215,16 @@ def read_xlsx_from_s3(bucket: str, key: str) -> list[dict]:
             continue
 
         students.append({
-            "studentId": student_id,
-            "firstName": _safe_str(cell(row, "FirstName")),
-            "lastName": _safe_str(cell(row, "LastName")),
-            "email": _safe_str(cell(row, "Email")),
-            "major": _safe_str(cell(row, "Major")),
-            "advisor": _safe_str(cell(row, "Advisor")),
-            "gpa": _safe_float(cell(row, "GPA")),
-            "attendanceRate": _safe_float(cell(row, "AttendanceRate")),
-            "advisingVisits": _safe_int(cell(row, "AdvisingVisits")),
-            "failedCourses": _safe_int(cell(row, "FailedCourses")),
-            "financialAidIssues": _safe_bool(cell(row, "FinancialAidIssues")),
-            "enrollmentDate": _enrollment_date_str(cell(row, "EnrollmentDate")),
-            "creditHoursAttempted": _safe_int(cell(row, "CreditHoursAttempted")),
-            "creditHoursEarned": _safe_int(cell(row, "CreditHoursEarned")),
-            "lastLoginDays": _safe_int(cell(row, "LastLoginDays")),
-            "dormResident": _safe_bool(cell(row, "DormResident")),
+            "studentId":           student_id,
+            "currentGpa":          _safe_float(cell(row, "current_gpa")),
+            "previousGpa":         _safe_float(cell(row, "previous_gpa")),
+            "attendancePct":       _safe_float(cell(row, "attendance_pct")),
+            "missedClasses":       _safe_int(cell(row, "missed_classes")),
+            "lmsActivityScore":    _safe_float(cell(row, "lms_activity_score")),
+            "missingAssignments":  _safe_int(cell(row, "missing_assignments")),
+            "advisingVisitCount":  _safe_int(cell(row, "advising_visit_count")),
+            "daysSinceLastAdvising": _safe_int(cell(row, "days_since_last_advising")),
+            "retentionStatus":     _safe_str(cell(row, "retention_status")),
         })
 
     logger.info("Parsed %d student rows", len(students))
@@ -249,34 +242,28 @@ def _to_dynamo_item(student: dict, now_iso: str) -> dict:
     DynamoDB does not accept Python floats directly; Decimal is used instead.
     """
     risk_score, risk_level = compute_risk(
-        gpa=student["gpa"],
-        attendance=student["attendanceRate"],
-        advising_visits=student["advisingVisits"],
-        failed_courses=student["failedCourses"],
-        financial_aid_issues=student["financialAidIssues"],
-        last_login_days=student["lastLoginDays"],
+        current_gpa=student["currentGpa"],
+        attendance_pct=student["attendancePct"],
+        advising_visit_count=student["advisingVisitCount"],
+        missing_assignments=student["missingAssignments"],
+        missed_classes=student["missedClasses"],
+        days_since_last_advising=student["daysSinceLastAdvising"],
     )
 
     return {
-        "studentId": student["studentId"],
-        "firstName": student["firstName"],
-        "lastName": student["lastName"],
-        "email": student["email"],
-        "major": student["major"],
-        "advisor": student["advisor"],
-        "gpa": Decimal(str(round(student["gpa"], 4))),
-        "attendanceRate": Decimal(str(round(student["attendanceRate"], 4))),
-        "advisingVisits": student["advisingVisits"],
-        "failedCourses": student["failedCourses"],
-        "financialAidIssues": student["financialAidIssues"],
-        "enrollmentDate": student["enrollmentDate"],
-        "creditHoursAttempted": student["creditHoursAttempted"],
-        "creditHoursEarned": student["creditHoursEarned"],
-        "lastLoginDays": student["lastLoginDays"],
-        "dormResident": student["dormResident"],
-        "riskScore": risk_score,
-        "riskLevel": risk_level,
-        "lastUpdated": now_iso,
+        "studentId":             student["studentId"],
+        "currentGpa":            Decimal(str(round(student["currentGpa"], 4))),
+        "previousGpa":           Decimal(str(round(student["previousGpa"], 4))),
+        "attendancePct":         Decimal(str(round(student["attendancePct"], 4))),
+        "missedClasses":         student["missedClasses"],
+        "lmsActivityScore":      Decimal(str(round(student["lmsActivityScore"], 4))),
+        "missingAssignments":    student["missingAssignments"],
+        "advisingVisitCount":    student["advisingVisitCount"],
+        "daysSinceLastAdvising": student["daysSinceLastAdvising"],
+        "retentionStatus":       student["retentionStatus"],
+        "riskScore":             risk_score,
+        "riskLevel":             risk_level,
+        "lastUpdated":           now_iso,
     }
 
 
@@ -311,13 +298,7 @@ def batch_write_students(students: list[dict], now_iso: str) -> dict:
 # Lambda handler
 # ---------------------------------------------------------------------------
 
-def handler(event: dict, context) -> dict:
-    """
-    Lambda entry point.
-
-    Expects an S3 event notification containing the bucket and key of the
-    uploaded xlsx file.  Parses all student rows, scores them, and writes the
-    results to DynamoDB.
+def lambda_handler(event: dict, context) -> dict:
 
     Parameters
     ----------

@@ -195,9 +195,7 @@ def get_student_by_id(student_id: str) -> dict:
 # Lambda handler
 # ---------------------------------------------------------------------------
 
-def handler(event: dict, context) -> dict:
-    """
-    Lambda entry point for the score-risk API.
+def lambda_handler(event: dict, context) -> dict:
 
     Routes incoming API Gateway proxy requests to the appropriate handler
     based on the HTTP method and resource path.

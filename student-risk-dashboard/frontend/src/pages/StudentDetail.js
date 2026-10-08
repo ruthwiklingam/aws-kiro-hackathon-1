@@ -32,18 +32,13 @@ export default function StudentDetail() {
   function buildRadarData(s) {
     const normalize = (val, min, max) => {
       if (val == null) return 0;
-      return Math.min(100, Math.max(0, Math.round(((val - min) / (max - min)) * 100)));
+      return Math.min(100, Math.max(0, Math.round(((Number(val) - min) / (max - min)) * 100)));
     };
     return [
-      { metric: 'GPA', value: normalize(s.gpa, 0, 4) },
-      { metric: 'Attendance', value: normalize((s.attendanceRate ?? 0) * 100, 0, 100) },
-      { metric: 'Advising', value: normalize(s.advisingVisits, 0, 10) },
-      {
-        metric: 'Credit Completion',
-        value: s.creditHoursAttempted > 0
-          ? Math.round((s.creditHoursEarned / s.creditHoursAttempted) * 100)
-          : 0,
-      },
+      { metric: 'GPA',        value: normalize(s.currentGpa, 0, 4) },
+      { metric: 'Attendance', value: normalize(s.attendancePct, 0, 100) },
+      { metric: 'Advising',   value: normalize(s.advisingVisitCount, 0, 10) },
+      { metric: 'LMS Activity', value: normalize(s.lmsActivityScore, 0, 100) },
     ];
   }
 
@@ -101,7 +96,7 @@ export default function StudentDetail() {
           </button>
           {student && (
             <div className={styles.studentHeaderInfo}>
-              <span className={styles.studentName}>{student.name}</span>
+              <span className={styles.studentName}>{student.studentId}</span>
               <span className={styles.studentId}>ID: {student.studentId || id}</span>
               <RiskBadge level={student.riskLevel} large />
             </div>
@@ -141,41 +136,56 @@ export default function StudentDetail() {
             {/* Stats grid */}
             <div className={styles.statsGrid}>
               <div className={styles.statTile}>
-                <span className={styles.statTileLabel}>GPA</span>
+                <span className={styles.statTileLabel}>Current GPA</span>
                 <span className={styles.statTileValue}>
-                  {student.gpa != null ? student.gpa.toFixed(2) : '—'}
+                  {student.currentGpa != null ? Number(student.currentGpa).toFixed(2) : '—'}
                 </span>
               </div>
               <div className={styles.statTile}>
-                <span className={styles.statTileLabel}>Attendance Rate</span>
+                <span className={styles.statTileLabel}>Previous GPA</span>
                 <span className={styles.statTileValue}>
-                  {student.attendanceRate != null
-                    ? `${(student.attendanceRate * 100).toFixed(0)}%`
+                  {student.previousGpa != null ? Number(student.previousGpa).toFixed(2) : '—'}
+                </span>
+              </div>
+              <div className={styles.statTile}>
+                <span className={styles.statTileLabel}>Attendance %</span>
+                <span className={styles.statTileValue}>
+                  {student.attendancePct != null
+                    ? `${Number(student.attendancePct).toFixed(0)}%`
                     : '—'}
                 </span>
               </div>
               <div className={styles.statTile}>
-                <span className={styles.statTileLabel}>Advising Visits</span>
-                <span className={styles.statTileValue}>{student.advisingVisits ?? '—'}</span>
-              </div>
-              <div className={styles.statTile}>
-                <span className={styles.statTileLabel}>Failed Courses</span>
-                <span className={`${styles.statTileValue} ${(student.failedCourses ?? 0) > 0 ? styles.valueRed : ''}`}>
-                  {student.failedCourses ?? '—'}
+                <span className={styles.statTileLabel}>Missed Classes</span>
+                <span className={`${styles.statTileValue} ${(student.missedClasses ?? 0) > 5 ? styles.valueRed : ''}`}>
+                  {student.missedClasses ?? '—'}
                 </span>
               </div>
               <div className={styles.statTile}>
-                <span className={styles.statTileLabel}>Credit Hours</span>
+                <span className={styles.statTileLabel}>Missing Assignments</span>
+                <span className={`${styles.statTileValue} ${(student.missingAssignments ?? 0) > 3 ? styles.valueRed : ''}`}>
+                  {student.missingAssignments ?? '—'}
+                </span>
+              </div>
+              <div className={styles.statTile}>
+                <span className={styles.statTileLabel}>LMS Activity Score</span>
                 <span className={styles.statTileValue}>
-                  {student.creditHoursEarned ?? '—'} / {student.creditHoursAttempted ?? '—'}
-                  <small className={styles.statSub}> earned / attempted</small>
+                  {student.lmsActivityScore != null ? Number(student.lmsActivityScore).toFixed(0) : '—'}
                 </span>
               </div>
               <div className={styles.statTile}>
-                <span className={styles.statTileLabel}>Days Since Login</span>
-                <span className={`${styles.statTileValue} ${(student.daysSinceLogin ?? 0) > 30 ? styles.valueAmber : ''}`}>
-                  {student.daysSinceLogin ?? '—'}
+                <span className={styles.statTileLabel}>Advising Visits</span>
+                <span className={styles.statTileValue}>{student.advisingVisitCount ?? '—'}</span>
+              </div>
+              <div className={styles.statTile}>
+                <span className={styles.statTileLabel}>Days Since Last Advising</span>
+                <span className={`${styles.statTileValue} ${(student.daysSinceLastAdvising ?? 0) > 60 ? styles.valueAmber : ''}`}>
+                  {student.daysSinceLastAdvising ?? '—'}
                 </span>
+              </div>
+              <div className={styles.statTile}>
+                <span className={styles.statTileLabel}>Retention Status</span>
+                <span className={styles.statTileValue}>{student.retentionStatus ?? '—'}</span>
               </div>
             </div>
 

@@ -39,7 +39,7 @@ logger.setLevel(logging.INFO)
 # ---------------------------------------------------------------------------
 STUDENTS_TABLE = os.environ["STUDENTS_TABLE"]
 REGION = os.environ.get("AWS_REGION", "us-east-1")
-BEDROCK_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
 
 # Retry / backoff settings for Bedrock throttling
 MAX_RETRIES = 3
@@ -135,33 +135,32 @@ def build_prompt(student: dict) -> str:
     The prompt asks the model to return a strict JSON object with the
     recommendations schema expected by the API.
     """
-    first = student.get("firstName", "")
-    last = student.get("lastName", "")
-    full_name = f"{first} {last}".strip() or student.get("studentId", "Unknown")
-
-    gpa = float(student.get("gpa", 0))
-    attendance = float(student.get("attendanceRate", 0))
-    advising = student.get("advisingVisits", 0)
-    failed = student.get("failedCourses", 0)
-    financial_aid = student.get("financialAidIssues", False)
+    student_id = student.get("studentId", "Unknown")
+    current_gpa = float(student.get("currentGpa", 0))
+    previous_gpa = float(student.get("previousGpa", 0))
+    attendance_pct = float(student.get("attendancePct", 0))
+    missed_classes = student.get("missedClasses", 0)
+    lms_score = float(student.get("lmsActivityScore", 0))
+    missing_assignments = student.get("missingAssignments", 0)
+    advising_visits = student.get("advisingVisitCount", 0)
+    days_since_advising = student.get("daysSinceLastAdvising", 0)
+    retention_status = student.get("retentionStatus", "Unknown")
     risk_score = student.get("riskScore", 0)
     risk_level = student.get("riskLevel", "UNKNOWN")
-    major = student.get("major", "Unknown")
-    advisor = student.get("advisor", "Unknown")
-
-    financial_aid_str = "Yes" if financial_aid else "No"
 
     prompt = f"""You are an academic advisor assistant helping to identify at-risk students and suggest interventions.
 
 Student Profile:
-- Name: {full_name}
-- Major: {major}
-- Advisor: {advisor}
-- GPA: {gpa:.2f}
-- Attendance Rate: {attendance:.1f}%
-- Advising Visits This Term: {advising}
-- Failed Courses: {failed}
-- Financial Aid Issues: {financial_aid_str}
+- Student ID: {student_id}
+- Current GPA: {current_gpa:.2f}
+- Previous GPA: {previous_gpa:.2f}
+- Attendance: {attendance_pct:.0f}%
+- Missed Classes: {missed_classes}
+- Missing Assignments: {missing_assignments}
+- LMS Activity Score: {lms_score:.0f}/100
+- Advising Visits This Term: {advising_visits}
+- Days Since Last Advising: {days_since_advising}
+- Retention Status: {retention_status}
 - Risk Score: {risk_score}/100
 - Risk Level: {risk_level}
 
@@ -327,9 +326,7 @@ def parse_recommendations(raw_text: str) -> list[dict]:
 # Lambda handler
 # ---------------------------------------------------------------------------
 
-def handler(event: dict, context) -> dict:
-    """
-    Lambda entry point for the generate-recommendations API.
+def lambda_handler(event: dict, context) -> dict:
 
     Handles POST /students/{id}/recommend.  Fetches the student, calls Bedrock
     to produce 3 tailored recommendations, stores them on the DynamoDB record,
@@ -407,13 +404,8 @@ def handler(event: dict, context) -> dict:
         logger.warning("Returning recommendations despite storage failure.")
 
     # --- Build response payload ---
-    first = student.get("firstName", "")
-    last = student.get("lastName", "")
-    student_name = f"{first} {last}".strip() or student_id
-
     payload = {
         "studentId": student_id,
-        "studentName": student_name,
         "riskLevel": student.get("riskLevel", "UNKNOWN"),
         "recommendations": recommendations,
         "generatedAt": now_iso,
