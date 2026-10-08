@@ -224,10 +224,12 @@ Resources:
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
                   - bedrock:Converse
                 Resource:
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-*
-                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+                  - arn:aws:bedrock:*::foundation-model/*
+                  - !Sub arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*
+                  - arn:aws:bedrock:*::inference-profile/*
               - Effect: Allow
                 Action:
                   - aws-marketplace:ViewSubscriptions
