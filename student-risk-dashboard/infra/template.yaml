@@ -1,0 +1,687 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Student Risk Dashboard – S3, DynamoDB, Lambda (x3), API Gateway (REST),
+  Cognito User Pool, CloudWatch Alarms, and SNS alert topic.
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-sonnet-20240229-v1:0
+    Description: Bedrock model ID used by the generate-recommendations Lambda.
+
+  LambdaLayerBucket:
+    Type: String
+    Description: S3 bucket that holds the pre-packaged Lambda layer ZIP.
+
+  LambdaLayerKey:
+    Type: String
+    Default: layers/dependencies.zip
+    Description: S3 key of the Lambda layer ZIP.
+
+  IngestLambdaS3Key:
+    Type: String
+    Default: lambdas/ingest-students.zip
+
+  ScoreLambdaS3Key:
+    Type: String
+    Default: lambdas/score-risk.zip
+
+  RecommendLambdaS3Key:
+    Type: String
+    Default: lambdas/generate-recommendations.zip
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # =========================================================================
+  # SNS – alert topic (user adds subscriptions manually)
+  # =========================================================================
+  StudentRiskAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: StudentRiskAlerts
+
+  # =========================================================================
+  # S3 – data bucket
+  # =========================================================================
+  StudentRiskBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: IngestLambdaInvokePermission
+    Properties:
+      BucketName: !Sub student-risk-data-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - HEAD
+            AllowedOrigins:
+              - '*'           # tighten to your Amplify domain after first deploy
+            MaxAge: 3000
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: Team1Dataset
+                  - Name: suffix
+                    Value: .xlsx
+            Function: !GetAtt IngestStudentsFunction.Arn
+
+  StudentRiskBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StudentRiskBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowIngestLambdaRead
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt IngestStudentsRole.Arn
+            Action: s3:GetObject
+            Resource: !Sub arn:aws:s3:::student-risk-data-${AWS::AccountId}/*
+
+  # =========================================================================
+  # DynamoDB – students table
+  # =========================================================================
+  StudentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: students
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: studentId
+          AttributeType: S
+        - AttributeName: riskLevel
+          AttributeType: S
+      KeySchema:
+        - AttributeName: studentId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: riskLevel-index
+          KeySchema:
+            - AttributeName: riskLevel
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # =========================================================================
+  # Lambda Layer – shared dependencies
+  # =========================================================================
+  DependenciesLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: student-risk-dependencies
+      Description: Shared Python dependencies for the student risk dashboard Lambdas.
+      CompatibleRuntimes:
+        - python3.12
+      Content:
+        S3Bucket: !Ref LambdaLayerBucket
+        S3Key: !Ref LambdaLayerKey
+
+  # =========================================================================
+  # IAM Roles
+  # =========================================================================
+  IngestStudentsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub student-risk-ingest-role-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: IngestStudentsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:aws:s3:::student-risk-data-${AWS::AccountId}/*
+              - Effect: Allow
+                Action:
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:PutItem
+                Resource: !GetAtt StudentsTable.Arn
+
+  ScoreRiskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub student-risk-score-role-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ScoreRiskPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:GetItem
+                Resource:
+                  - !GetAtt StudentsTable.Arn
+                  - !Sub ${StudentsTable.Arn}/index/*
+
+  GenerateRecommendationsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub student-risk-recommend-role-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: GenerateRecommendationsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt StudentsTable.Arn
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+
+  # =========================================================================
+  # Lambda Functions
+  # =========================================================================
+  IngestStudentsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ingest-students
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt IngestStudentsRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      Layers:
+        - !Ref DependenciesLayer
+      Code:
+        S3Bucket: !Ref LambdaLayerBucket
+        S3Key: !Ref IngestLambdaS3Key
+      Environment:
+        Variables:
+          STUDENTS_TABLE: !Ref StudentsTable
+          STUDENTS_BUCKET: !Sub student-risk-data-${AWS::AccountId}
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+
+  ScoreRiskFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: score-risk
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt ScoreRiskRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      Layers:
+        - !Ref DependenciesLayer
+      Code:
+        S3Bucket: !Ref LambdaLayerBucket
+        S3Key: !Ref ScoreLambdaS3Key
+      Environment:
+        Variables:
+          STUDENTS_TABLE: !Ref StudentsTable
+          STUDENTS_BUCKET: !Sub student-risk-data-${AWS::AccountId}
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+
+  GenerateRecommendationsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: generate-recommendations
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt GenerateRecommendationsRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Layers:
+        - !Ref DependenciesLayer
+      Code:
+        S3Bucket: !Ref LambdaLayerBucket
+        S3Key: !Ref RecommendLambdaS3Key
+      Environment:
+        Variables:
+          STUDENTS_TABLE: !Ref StudentsTable
+          STUDENTS_BUCKET: !Sub student-risk-data-${AWS::AccountId}
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+
+  # =========================================================================
+  # Lambda Permission – allow S3 to invoke ingest-students
+  # =========================================================================
+  IngestLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt IngestStudentsFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws:s3:::student-risk-data-${AWS::AccountId}
+      SourceAccount: !Ref AWS::AccountId
+
+  # =========================================================================
+  # Cognito User Pool
+  # =========================================================================
+  StudentRiskUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: StudentRiskAdvisors
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      MfaConfiguration: OPTIONAL
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  StudentRiskUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: StudentRiskWebClient
+      UserPoolId: !Ref StudentRiskUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+
+  StudentRiskUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub student-risk-advisors-${AWS::AccountId}
+      UserPoolId: !Ref StudentRiskUserPool
+
+  # =========================================================================
+  # API Gateway – REST API
+  # =========================================================================
+  StudentRiskAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: StudentRiskAPI
+      Description: REST API for the Student Risk Dashboard
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # Cognito Authorizer
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoAuthorizer
+      RestApiId: !Ref StudentRiskAPI
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !GetAtt StudentRiskUserPool.Arn
+
+  # ---- /students ----
+  StudentsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ParentId: !GetAtt StudentRiskAPI.RootResourceId
+      PathPart: students
+
+  # GET /students -> score-risk
+  StudentsGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ResourceId: !Ref StudentsResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Arn}/invocations
+          - Arn: !GetAtt ScoreRiskFunction.Arn
+
+  # OPTIONS /students – CORS preflight (no auth)
+  StudentsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ResourceId: !Ref StudentsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+
+  # ---- /students/{id} ----
+  StudentIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ParentId: !Ref StudentsResource
+      PathPart: '{id}'
+
+  # GET /students/{id} -> score-risk
+  StudentIdGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ResourceId: !Ref StudentIdResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Arn}/invocations
+          - Arn: !GetAtt ScoreRiskFunction.Arn
+
+  # OPTIONS /students/{id} – CORS preflight
+  StudentIdOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ResourceId: !Ref StudentIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+
+  # ---- /students/{id}/recommend ----
+  RecommendResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ParentId: !Ref StudentIdResource
+      PathPart: recommend
+
+  # POST /students/{id}/recommend -> generate-recommendations
+  RecommendPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ResourceId: !Ref RecommendResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Arn}/invocations
+          - Arn: !GetAtt GenerateRecommendationsFunction.Arn
+
+  # OPTIONS /students/{id}/recommend – CORS preflight
+  RecommendOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      ResourceId: !Ref RecommendResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+
+  # Lambda invoke permissions for API Gateway
+  ScoreRiskApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ScoreRiskFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${StudentRiskAPI}/*/*
+
+  GenerateRecommendationsApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt GenerateRecommendationsFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${StudentRiskAPI}/*/*
+
+  # API Gateway Deployment – depends on all methods so it re-deploys on changes
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - StudentsGetMethod
+      - StudentsOptionsMethod
+      - StudentIdGetMethod
+      - StudentIdOptionsMethod
+      - RecommendPostMethod
+      - RecommendOptionsMethod
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      Description: !Sub Deployment at ${AWS::StackName}
+
+  ApiProdStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref StudentRiskAPI
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+      Description: Production stage
+
+  # =========================================================================
+  # CloudWatch Alarms
+  # =========================================================================
+
+  # --- Lambda error alarms (> 5 errors in 5 minutes) ---
+  IngestStudentsErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ingest-students-errors
+      AlarmDescription: ingest-students Lambda errors exceeded threshold
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestStudentsFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref StudentRiskAlertsTopic
+
+  ScoreRiskErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: score-risk-errors
+      AlarmDescription: score-risk Lambda errors exceeded threshold
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ScoreRiskFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref StudentRiskAlertsTopic
+
+  GenerateRecommendationsErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: generate-recommendations-errors
+      AlarmDescription: generate-recommendations Lambda errors exceeded threshold
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref GenerateRecommendationsFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref StudentRiskAlertsTopic
+
+  # --- DynamoDB throttle alarm (> 0) ---
+  DynamoDBThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: students-table-throttles
+      AlarmDescription: DynamoDB students table is being throttled
+      Namespace: AWS/DynamoDB
+      MetricName: ThrottledRequests
+      Dimensions:
+        - Name: TableName
+          Value: !Ref StudentsTable
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref StudentRiskAlertsTopic
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  ApiUrl:
+    Description: Invoke URL for the prod stage of the REST API
+    Value: !Sub https://${StudentRiskAPI}.execute-api.${AWS::Region}.amazonaws.com/prod
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiUrl
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref StudentRiskUserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+
+  UserPoolClientId:
+    Description: Cognito User Pool Web Client ID
+    Value: !Ref StudentRiskUserPoolClient
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolClientId
+
+  BucketName:
+    Description: S3 data bucket name
+    Value: !Ref StudentRiskBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-BucketName
+
+  TableName:
+    Description: DynamoDB students table name
+    Value: !Ref StudentsTable
+    Export:
+      Name: !Sub ${AWS::StackName}-TableName
+
+  CognitoDomain:
+    Description: Cognito hosted UI domain
+    Value: !Sub https://student-risk-advisors-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com
+    Export:
+      Name: !Sub ${AWS::StackName}-CognitoDomain
