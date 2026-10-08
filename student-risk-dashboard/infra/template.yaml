@@ -223,7 +223,7 @@ Resources:
                 Resource: !GetAtt StudentsTable.Arn
               - Effect: Allow
                 Action: bedrock:InvokeModel
-                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+                Resource: arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-*
 
   # =========================================================================
   # Lambda Functions
