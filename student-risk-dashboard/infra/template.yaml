@@ -314,7 +314,7 @@ Resources:
         - email
       AutoVerifiedAttributes:
         - email
-      MfaConfiguration: OPTIONAL
+      MfaConfiguration: 'OFF'
       Policies:
         PasswordPolicy:
           MinimumLength: 8

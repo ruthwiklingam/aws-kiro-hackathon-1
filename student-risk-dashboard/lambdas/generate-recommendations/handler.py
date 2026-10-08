@@ -327,7 +327,7 @@ def parse_recommendations(raw_text: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def lambda_handler(event: dict, context) -> dict:
-
+    """
     Handles POST /students/{id}/recommend.  Fetches the student, calls Bedrock
     to produce 3 tailored recommendations, stores them on the DynamoDB record,
     and returns the full payload.

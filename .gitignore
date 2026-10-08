@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Production build output
+build/
+
+# Environment variables (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Lambda packaging artifacts
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db

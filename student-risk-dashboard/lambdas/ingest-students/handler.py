@@ -209,7 +209,7 @@ def read_xlsx_from_s3(bucket: str, key: str) -> list[dict]:
 
     students = []
     for row_num, row in enumerate(rows[1:], start=2):
-        student_id = _safe_str(cell(row, "StudentID"))
+        student_id = _safe_str(cell(row, "student_id"))
         if not student_id:
             logger.warning("Row %d: empty StudentID — skipped", row_num)
             continue
@@ -299,7 +299,7 @@ def batch_write_students(students: list[dict], now_iso: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def lambda_handler(event: dict, context) -> dict:
-
+    """
     Parameters
     ----------
     event : dict

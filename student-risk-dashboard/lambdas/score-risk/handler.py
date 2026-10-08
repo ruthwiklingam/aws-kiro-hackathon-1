@@ -196,7 +196,7 @@ def get_student_by_id(student_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def lambda_handler(event: dict, context) -> dict:
-
+    """
     Routes incoming API Gateway proxy requests to the appropriate handler
     based on the HTTP method and resource path.
 
