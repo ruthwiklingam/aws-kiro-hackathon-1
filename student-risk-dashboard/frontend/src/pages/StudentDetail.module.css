@@ -327,11 +327,392 @@
   text-transform: capitalize;
 }
 
-.recDescription {
-  margin: 0;
-  font-size: 0.85rem;
+.recsSubtitle {
+  display: block;
+  font-size: 0.8rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.recTitleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.assignedBadge {
+  font-size: 0.75rem;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  padding: 2px 8px;
+  border-radius: 6px;
+  width: fit-content;
+  font-weight: 500;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid;
+}
+
+/* ── Stepper ── */
+.stepperContainer {
+  margin: 14px 0 12px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.stepperTrack {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  gap: 8px;
+}
+
+.stepNode {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex: 1;
+  position: relative;
+  text-align: center;
+  transition: transform 0.15s;
+}
+
+.stepNode:hover {
+  transform: translateY(-1px);
+}
+
+.stepCircle {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border: 2px solid #cbd5e1;
+  transition: all 0.2s;
+  z-index: 2;
+}
+
+.stepLabel {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1.2;
+}
+
+.stepCompleted .stepCircle {
+  background: #16a34a;
+  color: #fff;
+  border-color: #16a34a;
+}
+
+.stepCompleted .stepLabel {
+  color: #15803d;
+}
+
+.stepCurrent .stepCircle {
+  background: #2563eb;
+  color: #fff;
+  border-color: #1d4ed8;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+.stepCurrent .stepLabel {
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+/* ── Actions Row ── */
+.recActionsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.actionButtonsLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.advanceBtn {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.advanceBtn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.reopenBtn {
+  background: #f1f5f9;
   color: #475569;
-  line-height: 1.5;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reopenBtn:hover {
+  background: #e2e8f0;
+}
+
+.draftEmailBtn {
+  background: #f5f3ff;
+  color: #7c3aed;
+  border: 1px solid #ddd6fe;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.draftEmailBtn:hover {
+  background: #ede9fe;
+}
+
+.addNoteBtn {
+  background: transparent;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.addNoteBtn:hover {
+  border-color: #94a3b8;
+  color: #1e293b;
+}
+
+/* ── Note Box ── */
+.noteInputBox {
+  margin-top: 12px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.noteBoxTitle {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.noteTextarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.noteTextarea:focus {
+  outline: none;
+  border-color: #2563eb;
+}
+
+.noteBoxActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.saveNoteBtn {
+  background: #0f172a;
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.saveNoteBtn:hover:not(:disabled) {
+  background: #1e293b;
+}
+
+/* ── Notes History ── */
+.notesHistoryList {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notesSectionLabel {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.noteItem {
+  background: #f8fafc;
+  border-left: 3px solid #2563eb;
+  padding: 8px 12px;
+  border-radius: 0 6px 6px 0;
+  font-size: 0.8rem;
+}
+
+.noteHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: #1e293b;
+}
+
+.noteTime {
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.noteBody {
+  margin: 0;
+  color: #334155;
+  line-height: 1.4;
+}
+
+/* ── Modal ── */
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: 20px;
+}
+
+.modalCard {
+  background: #fff;
+  border-radius: 12px;
+  max-width: 600px;
+  width: 100%;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modalHeader {
+  padding: 16px 20px;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modalTitle {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.modalCloseBtn {
+  background: transparent;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  color: #64748b;
+}
+
+.modalBody {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modalLabel {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.modalInput, .modalTextarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  background: #f8fafc;
+}
+
+.modalFooter {
+  padding: 14px 20px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sendEmailBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #2563eb;
+  color: #fff;
+  text-decoration: none;
+  padding: 9px 18px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: background 0.15s;
+}
+
+.sendEmailBtn:hover {
+  background: #1d4ed8;
 }
 
 /* ── Responsive ── */
@@ -344,6 +725,8 @@
 @media (max-width: 700px) {
   .statsGrid { grid-template-columns: repeat(2, 1fr); }
   .main { padding: 16px; }
+  .stepperTrack { flex-direction: column; align-items: flex-start; }
+  .stepNode { flex-direction: row; }
 }
 
 @media (max-width: 480px) {

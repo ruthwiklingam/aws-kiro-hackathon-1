@@ -59,9 +59,17 @@ bedrock_client = boto3.client("bedrock-runtime", region_name=REGION)
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
-    "Access-Control-Allow-Methods": "POST,OPTIONS",
+    "Access-Control-Allow-Methods": "POST,PATCH,OPTIONS",
     "Content-Type": "application/json",
 }
+
+VALID_STATUSES = [
+    "Pending",
+    "Assigned to Advisor",
+    "Outreach Sent",
+    "Meeting Completed",
+    "Resolved / Improved",
+]
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -83,6 +91,37 @@ def _json_response(status_code: int, body: object) -> dict:
 
 def _error(status_code: int, message: str) -> dict:
     return _json_response(status_code, {"error": message})
+
+
+def normalize_recommendation(rec: dict, index: int, now_iso: str) -> dict:
+    """Ensure a recommendation object contains all lifecycle tracking fields."""
+    rec_id = rec.get("id") or f"intv-{int(time.time() * 1000)}-{index + 1}"
+    status = rec.get("status") if rec.get("status") in VALID_STATUSES else "Pending"
+    created_at = rec.get("createdAt") or now_iso
+    updated_at = rec.get("updatedAt") or now_iso
+    notes = rec.get("notes") if isinstance(rec.get("notes"), list) else []
+    history = rec.get("history") if isinstance(rec.get("history"), list) else [
+        {
+            "status": status,
+            "timestamp": created_at,
+            "by": "AI / System",
+            "note": "Recommendation generated",
+        }
+    ]
+
+    return {
+        "id": rec_id,
+        "title": str(rec.get("title", "")).strip(),
+        "description": str(rec.get("description", "")).strip(),
+        "urgency": str(rec.get("urgency", "medium")).lower().strip(),
+        "category": str(rec.get("category", "academic")).lower().strip(),
+        "status": status,
+        "assignedTo": rec.get("assignedTo"),
+        "notes": notes,
+        "history": history,
+        "createdAt": created_at,
+        "updatedAt": updated_at,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +232,7 @@ Rules:
 
 def generate_heuristic_recommendations(student: dict) -> list[dict]:
     """Generate high-quality rule-based recommendations tailored to student risk factors."""
+    now_iso = datetime.now(timezone.utc).isoformat()
     current_gpa = float(student.get("currentGpa", 0))
     attendance_pct = float(student.get("attendancePct", 100))
     missing_assignments = int(student.get("missingAssignments", 0))
@@ -250,7 +290,7 @@ def generate_heuristic_recommendations(student: dict) -> list[dict]:
             "category": "financial",
         })
 
-    return recs[:3]
+    return [normalize_recommendation(r, i, now_iso) for i, r in enumerate(recs[:3])]
 
 
 def invoke_bedrock_with_retry(prompt: str) -> str:
@@ -265,7 +305,6 @@ def invoke_bedrock_with_retry(prompt: str) -> str:
         "anthropic.claude-3-5-sonnet-20240620-v1:0",
         "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
     ]
-    # Remove duplicates preserving order
     seen = set()
     models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
@@ -308,7 +347,6 @@ def invoke_bedrock_with_retry(prompt: str) -> str:
 
                 last_error = exc
                 logger.warning("Bedrock model %s failed (error=%s): %s", model_id, error_code, exc)
-                # For non-throttle errors (e.g. AccessDeniedException), try next candidate model
                 break
 
     if last_error:
@@ -323,30 +361,11 @@ def invoke_bedrock_with_retry(prompt: str) -> str:
 def parse_recommendations(raw_text: str) -> list[dict]:
     """
     Parse the model's raw text response into a list of recommendation dicts.
-
-    The model is prompted to return strict JSON, but we defensively strip any
-    accidental markdown fences before parsing.
-
-    Parameters
-    ----------
-    raw_text : str
-        Raw text returned by the model.
-
-    Returns
-    -------
-    list[dict]
-        Validated list of recommendation objects.
-
-    Raises
-    ------
-    ValueError
-        If the text cannot be parsed as JSON or fails schema validation.
     """
-    # Strip markdown fences if the model included them despite instructions
+    now_iso = datetime.now(timezone.utc).isoformat()
     text = raw_text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
-        # Drop the first and last fence lines
         text = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
 
     try:
@@ -373,18 +392,98 @@ def parse_recommendations(raw_text: str) -> list[dict]:
         if not title:
             raise ValueError(f"Recommendation {i} missing 'title'.")
         if urgency not in valid_urgencies:
-            raise ValueError(f"Recommendation {i} has invalid urgency '{urgency}'.")
+            urgency = "medium"
         if category not in valid_categories:
-            raise ValueError(f"Recommendation {i} has invalid category '{category}'.")
+            category = "academic"
 
-        cleaned.append({
+        rec_obj = {
             "title": title,
             "description": description,
             "urgency": urgency,
             "category": category,
-        })
+        }
+        cleaned.append(normalize_recommendation(rec_obj, i, now_iso))
 
     return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Intervention status update handler (PATCH)
+# ---------------------------------------------------------------------------
+
+def handle_patch_intervention(student_id: str, body_str: str) -> dict:
+    """
+    Update the status, assignment, and notes of an intervention.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        body = json.loads(body_str or "{}")
+    except json.JSONDecodeError:
+        return _error(400, "Invalid JSON body.")
+
+    intervention_id = body.get("interventionId") or body.get("id")
+    new_status = body.get("status")
+    assigned_to = body.get("assignedTo")
+    note_text = body.get("note")
+    author = body.get("author") or assigned_to or "Advisor"
+
+    if new_status and new_status not in VALID_STATUSES:
+        return _error(400, f"Invalid status '{new_status}'. Allowed: {VALID_STATUSES}")
+
+    student = fetch_student(student_id)
+    if not student:
+        return _error(404, f"Student '{student_id}' not found.")
+
+    raw_recs = student.get("recommendations") or []
+    if not isinstance(raw_recs, list) or len(raw_recs) == 0:
+        return _error(404, "No recommendations found on student record to update.")
+
+    updated_recs = [normalize_recommendation(r, idx, now_iso) for idx, r in enumerate(raw_recs)]
+
+    # Match by ID or fallback to first matching or index
+    target_idx = -1
+    if intervention_id:
+        for idx, r in enumerate(updated_recs):
+            if str(r.get("id")) == str(intervention_id):
+                target_idx = idx
+                break
+
+    if target_idx == -1:
+        target_idx = 0  # fallback to first if not specified
+
+    target = updated_recs[target_idx]
+
+    if new_status:
+        target["status"] = new_status
+    if assigned_to is not None:
+        target["assignedTo"] = assigned_to
+
+    if note_text:
+        target.setdefault("notes", []).append({
+            "id": f"note-{int(time.time() * 1000)}",
+            "author": author,
+            "text": str(note_text).strip(),
+            "timestamp": now_iso,
+        })
+
+    target.setdefault("history", []).append({
+        "status": target["status"],
+        "timestamp": now_iso,
+        "by": author,
+        "note": note_text or f"Status changed to {target['status']}",
+    })
+
+    target["updatedAt"] = now_iso
+    updated_recs[target_idx] = target
+
+    # Store back to DynamoDB
+    store_recommendations(student_id, updated_recs, now_iso)
+
+    return _json_response(200, {
+        "studentId": student_id,
+        "recommendations": updated_recs,
+        "updatedAt": now_iso,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -393,21 +492,9 @@ def parse_recommendations(raw_text: str) -> list[dict]:
 
 def lambda_handler(event: dict, context) -> dict:
     """
-    Handles POST /students/{id}/recommend.  Fetches the student, calls Bedrock
-    to produce 3 tailored recommendations, stores them on the DynamoDB record,
-    and returns the full payload.
-
-    Parameters
-    ----------
-    event : dict
-        API Gateway proxy integration event.
-    context : LambdaContext
-        Lambda runtime context (unused).
-
-    Returns
-    -------
-    dict
-        API Gateway proxy response containing the recommendations payload.
+    Handles:
+      POST  /students/{id}/recommend       -> Generate recommendations with initial Pending status
+      PATCH /students/{id}/recommend       -> Update intervention status, advisor assignment, or notes
     """
     http_method = event.get("httpMethod", "").upper()
     resource = event.get("resource", "")
@@ -419,12 +506,16 @@ def lambda_handler(event: dict, context) -> dict:
     if http_method == "OPTIONS":
         return _json_response(200, {})
 
-    if http_method != "POST" or resource != "/students/{id}/recommend":
-        return _error(404, f"Route not found: {http_method} {resource}")
-
     student_id = (path_params.get("id") or "").strip()
     if not student_id:
         return _error(400, "Missing student ID in path.")
+
+    # --- Handle PATCH intervention status ---
+    if http_method == "PATCH":
+        return handle_patch_intervention(student_id, event.get("body", ""))
+
+    if http_method != "POST":
+        return _error(404, f"Route not found: {http_method} {resource}")
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -459,7 +550,6 @@ def lambda_handler(event: dict, context) -> dict:
         error_code = exc.response["Error"]["Code"]
         logger.error("DynamoDB error storing recommendations for studentId=%s: %s",
                      student_id, error_code)
-        # Return the recommendations even if storage failed — they were generated successfully.
         logger.warning("Returning recommendations despite storage failure.")
 
     # --- Build response payload ---

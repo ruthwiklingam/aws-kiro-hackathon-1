@@ -20,13 +20,34 @@ const URGENCY_COLORS = {
   LOW: { bg: '#f0fdf4', color: '#16a34a', border: '#86efac' },
 };
 
+const STATUS_CONFIG = {
+  'Pending': { index: 0, color: '#64748b', bg: '#f1f5f9', border: '#cbd5e1', next: 'Assigned to Advisor', nextAction: 'Assign Advisor' },
+  'Assigned to Advisor': { index: 1, color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe', next: 'Outreach Sent', nextAction: 'Log Outreach Sent' },
+  'Outreach Sent': { index: 2, color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe', next: 'Meeting Completed', nextAction: 'Mark Meeting Completed' },
+  'Meeting Completed': { index: 3, color: '#d97706', bg: '#fffbeb', border: '#fde68a', next: 'Resolved / Improved', nextAction: 'Mark Resolved' },
+  'Resolved / Improved': { index: 4, color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0', next: null, nextAction: 'Reopen Intervention' },
+};
+
+const STAGES = [
+  'Pending',
+  'Assigned to Advisor',
+  'Outreach Sent',
+  'Meeting Completed',
+  'Resolved / Improved',
+];
+
 export default function StudentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { student, loading, error } = useStudent(id);
+  const { student, loading, error, mutate } = useStudent(id);
   const [recommending, setRecommending] = useState(false);
   const [recommendations, setRecommendations] = useState(null);
   const [recommendError, setRecommendError] = useState('');
+  const [updatingId, setUpdatingId] = useState(null);
+  const [activeNoteModal, setActiveNoteModal] = useState(null); // recId
+  const [noteText, setNoteText] = useState('');
+  const [advisorName, setAdvisorName] = useState('');
+  const [emailModalRec, setEmailModalRec] = useState(null);
 
   // Build radar chart data from normalized student metrics
   function buildRadarData(s) {
@@ -61,7 +82,9 @@ export default function StudentDetail() {
         }
       );
 
-      setRecommendations(data.recommendations || data);
+      const recs = data.recommendations || data;
+      setRecommendations(recs);
+      if (mutate) mutate();
     } catch (err) {
       console.error('Generate recommendations error:', err);
       setRecommendError(
@@ -74,6 +97,46 @@ export default function StudentDetail() {
     }
   }
 
+  async function handleUpdateInterventionStatus(recId, nextStatus, newNote = null) {
+    setUpdatingId(recId);
+    setRecommendError('');
+    try {
+      const session = await fetchAuthSession();
+      const token = session.tokens?.idToken?.toString();
+
+      const payload = {
+        interventionId: recId,
+        status: nextStatus,
+        assignedTo: advisorName || student?.advisor || 'Academic Advisor',
+      };
+      if (newNote) {
+        payload.note = newNote;
+      }
+
+      const { data } = await axios.patch(
+        `${API_BASE}/students/${id}/recommend`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const updatedRecs = data.recommendations || data;
+      setRecommendations(updatedRecs);
+      setActiveNoteModal(null);
+      setNoteText('');
+      if (mutate) mutate();
+    } catch (err) {
+      console.error('Update intervention error:', err);
+      setRecommendError('Failed to update intervention status. Please try again.');
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
   async function handleSignOut() {
     try {
       await signOut();
@@ -83,8 +146,17 @@ export default function StudentDetail() {
     }
   }
 
-  // Use recommendations from student record if not freshly generated
-  const displayRecs = recommendations ?? student?.recommendations ?? null;
+  // Normalize recommendations to ensure every object has lifecycle fields
+  const rawRecs = recommendations ?? student?.recommendations ?? null;
+  const displayRecs = rawRecs
+    ? rawRecs.map((rec, i) => ({
+        ...rec,
+        id: rec.id || `rec-${i}`,
+        status: rec.status && STATUS_CONFIG[rec.status] ? rec.status : 'Pending',
+        notes: rec.notes || [],
+        history: rec.history || [],
+      }))
+    : null;
 
   return (
     <div className={styles.page}>
@@ -121,7 +193,7 @@ export default function StudentDetail() {
               <div>
                 <div className={styles.majorLine}>{student.major || 'Undeclared'}</div>
                 {student.advisor && (
-                  <div className={styles.advisorLine}>Advisor: <strong>{student.advisor}</strong></div>
+                  <div className={styles.advisorLine}>Assigned Advisor: <strong>{student.advisor}</strong></div>
                 )}
               </div>
             </div>
@@ -211,10 +283,15 @@ export default function StudentDetail() {
                 </ResponsiveContainer>
               </div>
 
-              {/* Recommendations */}
+              {/* Recommendations & Intervention Case Management */}
               <div className={styles.recsCard}>
                 <div className={styles.recsHeader}>
-                  <h2 className={styles.sectionTitle}>Recommendations</h2>
+                  <div>
+                    <h2 className={styles.sectionTitle}>Targeted Interventions & Tracking</h2>
+                    <span className={styles.recsSubtitle}>
+                      Track execution lifecycle: Pending ➔ Assigned ➔ Outreach ➔ Meeting ➔ Resolved
+                    </span>
+                  </div>
                   <button
                     onClick={handleGenerateRecommendations}
                     disabled={recommending}
@@ -226,7 +303,7 @@ export default function StudentDetail() {
                         Generating…
                       </>
                     ) : (
-                      'Generate Recommendations'
+                      '⚡ Generate / Refresh AI Interventions'
                     )}
                   </button>
                 </div>
@@ -237,19 +314,42 @@ export default function StudentDetail() {
 
                 {recommending && (
                   <div className={styles.recGenerating}>
-                    Asking Bedrock for personalized recommendations… this may take a few seconds.
+                    Asking Amazon Bedrock for tailored academic interventions…
                   </div>
                 )}
 
                 {!recommending && displayRecs && displayRecs.length > 0 && (
                   <div className={styles.recList}>
                     {displayRecs.map((rec, i) => {
-                      const urgencyStyle = URGENCY_COLORS[rec.urgency] || URGENCY_COLORS.LOW;
+                      const urgencyStyle = URGENCY_COLORS[rec.urgency?.toUpperCase()] || URGENCY_COLORS.LOW;
+                      const currentStatus = rec.status || 'Pending';
+                      const statusInfo = STATUS_CONFIG[currentStatus] || STATUS_CONFIG.Pending;
+                      const currentIdx = statusInfo.index;
+                      const isUpdating = updatingId === rec.id;
+
                       return (
-                        <div key={i} className={styles.recCard}>
+                        <div key={rec.id || i} className={styles.recCard}>
+                          {/* Top Header */}
                           <div className={styles.recCardHeader}>
-                            <span className={styles.recTitle}>{rec.title}</span>
+                            <div className={styles.recTitleGroup}>
+                              <span className={styles.recTitle}>{rec.title}</span>
+                              {rec.assignedTo && (
+                                <span className={styles.assignedBadge}>
+                                  👤 {rec.assignedTo}
+                                </span>
+                              )}
+                            </div>
                             <div className={styles.recBadges}>
+                              <span
+                                className={styles.statusBadge}
+                                style={{
+                                  background: statusInfo.bg,
+                                  color: statusInfo.color,
+                                  borderColor: statusInfo.border,
+                                }}
+                              >
+                                ● {currentStatus}
+                              </span>
                               {rec.urgency && (
                                 <span
                                   className={styles.urgencyBadge}
@@ -267,8 +367,113 @@ export default function StudentDetail() {
                               )}
                             </div>
                           </div>
+
+                          {/* Description */}
                           {rec.description && (
                             <p className={styles.recDescription}>{rec.description}</p>
+                          )}
+
+                          {/* Interactive Execution Stepper */}
+                          <div className={styles.stepperContainer}>
+                            <div className={styles.stepperTrack}>
+                              {STAGES.map((stg, sIdx) => {
+                                const isCompleted = sIdx < currentIdx;
+                                const isCurrent = sIdx === currentIdx;
+                                return (
+                                  <div
+                                    key={stg}
+                                    className={`${styles.stepNode} ${isCompleted ? styles.stepCompleted : ''} ${isCurrent ? styles.stepCurrent : ''}`}
+                                    onClick={() => !isUpdating && handleUpdateInterventionStatus(rec.id, stg)}
+                                    title={`Click to switch status to ${stg}`}
+                                  >
+                                    <div className={styles.stepCircle}>
+                                      {isCompleted ? '✓' : sIdx + 1}
+                                    </div>
+                                    <span className={styles.stepLabel}>{stg}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Action Toolbar */}
+                          <div className={styles.recActionsRow}>
+                            <div className={styles.actionButtonsLeft}>
+                              {statusInfo.next && (
+                                <button
+                                  className={styles.advanceBtn}
+                                  disabled={isUpdating}
+                                  onClick={() => handleUpdateInterventionStatus(rec.id, statusInfo.next)}
+                                >
+                                  {isUpdating ? 'Updating…' : `→ ${statusInfo.nextAction}`}
+                                </button>
+                              )}
+                              {currentStatus === 'Resolved / Improved' && (
+                                <button
+                                  className={styles.reopenBtn}
+                                  disabled={isUpdating}
+                                  onClick={() => handleUpdateInterventionStatus(rec.id, 'Assigned to Advisor')}
+                                >
+                                  ↺ Reopen
+                                </button>
+                              )}
+                              <button
+                                className={styles.draftEmailBtn}
+                                onClick={() => setEmailModalRec(rec)}
+                              >
+                                ✉️ Draft Outreach Email
+                              </button>
+                              <button
+                                className={styles.addNoteBtn}
+                                onClick={() => {
+                                  setActiveNoteModal(activeNoteModal === rec.id ? null : rec.id);
+                                  setNoteText('');
+                                }}
+                              >
+                                📝 {activeNoteModal === rec.id ? 'Close Notes' : 'Add Note / Log'}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Inline Note & History Box */}
+                          {activeNoteModal === rec.id && (
+                            <div className={styles.noteInputBox}>
+                              <h4 className={styles.noteBoxTitle}>Log Advisor Action or Meeting Note</h4>
+                              <textarea
+                                value={noteText}
+                                onChange={(e) => setNoteText(e.target.value)}
+                                placeholder="Enter details: meeting notes, student response, tutoring session scheduled, etc."
+                                className={styles.noteTextarea}
+                                rows={3}
+                              />
+                              <div className={styles.noteBoxActions}>
+                                <button
+                                  className={styles.saveNoteBtn}
+                                  disabled={!noteText.trim() || isUpdating}
+                                  onClick={() => handleUpdateInterventionStatus(rec.id, currentStatus, noteText.trim())}
+                                >
+                                  {isUpdating ? 'Saving…' : 'Save Note to Student Record'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Notes and Audit History list */}
+                          {rec.notes && rec.notes.length > 0 && (
+                            <div className={styles.notesHistoryList}>
+                              <span className={styles.notesSectionLabel}>Advisor Case Notes:</span>
+                              {rec.notes.map((n, nIdx) => (
+                                <div key={n.id || nIdx} className={styles.noteItem}>
+                                  <div className={styles.noteHeader}>
+                                    <strong>{n.author || 'Advisor'}</strong>
+                                    <span className={styles.noteTime}>
+                                      {new Date(n.timestamp).toLocaleDateString()} {new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                  <p className={styles.noteBody}>{n.text}</p>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
                       );
@@ -278,11 +483,58 @@ export default function StudentDetail() {
 
                 {!recommending && (!displayRecs || displayRecs.length === 0) && !recommendError && (
                   <div className={styles.noRecs}>
-                    No recommendations yet. Click "Generate Recommendations" to get AI-powered suggestions from Amazon Bedrock.
+                    No interventions active. Click "Generate / Refresh AI Interventions" to generate personalized, trackable retention recommendations.
                   </div>
                 )}
               </div>
             </div>
+
+            {/* Email Draft Modal */}
+            {emailModalRec && (
+              <div className={styles.modalBackdrop} onClick={() => setEmailModalRec(null)}>
+                <div className={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+                  <div className={styles.modalHeader}>
+                    <h3 className={styles.modalTitle}>✉️ Student Outreach Email Draft</h3>
+                    <button className={styles.modalCloseBtn} onClick={() => setEmailModalRec(null)}>✕</button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <label className={styles.modalLabel}>Recipient</label>
+                    <input
+                      type="text"
+                      readOnly
+                      className={styles.modalInput}
+                      value={`${student.studentId}@university.edu`}
+                    />
+                    <label className={styles.modalLabel}>Subject</label>
+                    <input
+                      type="text"
+                      readOnly
+                      className={styles.modalInput}
+                      value={`Support & Advising Check-in: ${emailModalRec.title}`}
+                    />
+                    <label className={styles.modalLabel}>Email Content</label>
+                    <textarea
+                      readOnly
+                      rows={7}
+                      className={styles.modalTextarea}
+                      value={`Dear Student,\n\nI am reaching out regarding your academic progress in the ${student.major || 'department'} program. Based on your recent coursework, we would like to collaborate on the following action step:\n\n• ${emailModalRec.title}: ${emailModalRec.description}\n\nPlease reply to this email or drop by during advisor office hours so we can set you up for success this semester.\n\nWarm regards,\n${student.advisor || 'Academic Advising Team'}`}
+                    />
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <a
+                      href={`mailto:${student.studentId}@university.edu?subject=${encodeURIComponent(`Support & Advising Check-in: ${emailModalRec.title}`)}&body=${encodeURIComponent(`Dear Student,\n\nI am reaching out regarding your academic progress in the ${student.major || 'department'} program. Based on your recent coursework, we would like to collaborate on the following action step:\n\n• ${emailModalRec.title}: ${emailModalRec.description}\n\nPlease reply to this email or drop by during advisor office hours so we can set you up for success this semester.\n\nWarm regards,\n${student.advisor || 'Academic Advising Team'}`)}`}
+                      className={styles.sendEmailBtn}
+                      onClick={() => {
+                        handleUpdateInterventionStatus(emailModalRec.id, 'Outreach Sent', 'Outreach email drafted and launched to student email client.');
+                        setEmailModalRec(null);
+                      }}
+                    >
+                      🚀 Open in Email Client & Mark "Outreach Sent"
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
