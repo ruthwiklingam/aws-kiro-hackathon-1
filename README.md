@@ -161,3 +161,10 @@ In the SNS console, subscribe your email to the `StudentRiskAlerts` topic to rec
 | Last login > 14 days | +5 |
 
 **Score ≥ 60 → HIGH · Score 30–59 → MEDIUM · Score < 30 → LOW**
+
+
+## Project Presentation
+
+### AWS Hackathon 2026 — Student Risk Dashboard
+
+[View Our Interactive Project Presentation](https://claude.ai/artifact/XghSCiXZKCuv77pxw7yJNX#slide-3dd33bdac6c2)
